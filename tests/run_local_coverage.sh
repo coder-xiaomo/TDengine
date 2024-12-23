@@ -138,11 +138,17 @@ elif [ -n "$BRANCH_BUILD" ] && [ "$BRANCH_BUILD" == "yes" ] ; then
 elif [ -n "$BRANCH_BUILD" ] && [ "$BRANCH_BUILD" == "no" ] ; then
     branch="$BRANCH"
     print_color "$GREEN" "Testing branch: $branch "
-    print_color "$GREEN" "not build,only install!"
+    print_color "$GREEN" "not build,only pull && install!"
     cd "$TDENGINE_DIR/../"
     git pull
     cd "$TDENGINE_DIR/"
     git pull
+    cd $TDENGINE_DIR/debug
+    make -j 8 install 
+elif [ -n "$BRANCH_BUILD" ] && [ "$BRANCH_BUILD" == "no_pull" ] ; then
+    branch="$BRANCH"
+    print_color "$GREEN" "Testing branch: $branch "
+    print_color "$GREEN" "not build,only install!"
     cd $TDENGINE_DIR/debug
     make -j 8 install 
 else
