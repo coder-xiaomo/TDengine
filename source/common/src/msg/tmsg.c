@@ -898,7 +898,6 @@ int32_t tSerializeSMAlterStbReq(void *buf, int32_t bufLen, SMAlterStbReq *pReq) 
       TAOS_CHECK_EXIT(tEncodeI32(&encoder, pField->bytes));
       TAOS_CHECK_EXIT(tEncodeCStr(&encoder, pField->name));
       TAOS_CHECK_EXIT(tEncodeU32(&encoder, pField->compress));
-      TAOS_CHECK_EXIT(tEncodeI32(&encoder, pField->typeMod));
 
     } else {
       SField *pField = taosArrayGet(pReq->pFields, i);
@@ -913,6 +912,19 @@ int32_t tSerializeSMAlterStbReq(void *buf, int32_t bufLen, SMAlterStbReq *pReq) 
     TAOS_CHECK_EXIT(tEncodeCStr(&encoder, pReq->comment));
   }
   ENCODESQL();
+  if (pReq->alterType == TSDB_ALTER_TABLE_ADD_COLUMN ||
+      pReq->alterType == TSDB_ALTER_TABLE_ADD_COLUMN_WITH_COMPRESS_OPTION) {
+    if (taosArrayGetSize(pReq->pTypeMods) > 0) {
+      int8_t hasTypeMod = 1;
+      TAOS_CHECK_EXIT(tEncodeI8(&encoder, hasTypeMod));
+      for (int32_t i = 0; i < pReq->pTypeMods->size; ++i) {
+        const STypeMod *pTypeMod = taosArrayGet(pReq->pTypeMods, i);
+        TAOS_CHECK_ERRNO(tEncodeI32(&encoder, *pTypeMod));
+      }
+    } else {
+      TAOS_CHECK_EXIT(tEncodeI8(&encoder, 0));
+    }
+  }
   tEndEncode(&encoder);
 
 _exit:
@@ -951,7 +963,6 @@ int32_t tDeserializeSMAlterStbReq(void *buf, int32_t bufLen, SMAlterStbReq *pReq
       TAOS_CHECK_EXIT(tDecodeI32(&decoder, &field.bytes));
       TAOS_CHECK_EXIT(tDecodeCStrTo(&decoder, field.name));
       TAOS_CHECK_EXIT(tDecodeU32(&decoder, &field.compress));
-      TAOS_CHECK_EXIT(tDecodeI32(&decoder, &field.typeMod));
       if (taosArrayPush(pReq->pFields, &field) == NULL) {
         TAOS_CHECK_EXIT(terrno);
       }
@@ -977,7 +988,24 @@ int32_t tDeserializeSMAlterStbReq(void *buf, int32_t bufLen, SMAlterStbReq *pReq
   }
 
   DECODESQL();
-
+  if (!tDecodeIsEnd(&decoder) && (pReq->alterType == TSDB_ALTER_TABLE_ADD_COLUMN ||
+                                  pReq->alterType == TSDB_ALTER_TABLE_ADD_COLUMN_WITH_COMPRESS_OPTION)) {
+    int8_t hasTypeMod = 0;
+    TAOS_CHECK_EXIT(tDecodeI8(&decoder, &hasTypeMod));
+    if (hasTypeMod == 1) {
+      pReq->pTypeMods = taosArrayInit(pReq->numOfFields, sizeof(STypeMod));
+      if (!pReq->pTypeMods) {
+        TAOS_CHECK_EXIT(terrno);
+      }
+      for (int32_t i = 0; i < pReq->numOfFields; ++i) {
+        STypeMod typeMod = 0;
+        TAOS_CHECK_EXIT(tDecodeI32(&decoder, &typeMod));
+        if (taosArrayPush(pReq->pTypeMods, &typeMod) == NULL) {
+          TAOS_CHECK_EXIT(terrno);
+        }
+      }
+    }
+  }
   tEndDecode(&decoder);
 
 _exit:
@@ -990,6 +1018,7 @@ void tFreeSMAltertbReq(SMAlterStbReq *pReq) {
   pReq->pFields = NULL;
   taosMemoryFreeClear(pReq->comment);
   FREESQL();
+  taosArrayDestroy(pReq->pTypeMods);
 }
 
 int32_t tSerializeSEpSet(void *buf, int32_t bufLen, const SEpSet *pEpset) {
@@ -9972,7 +10001,13 @@ int32_t tSerializeSCMCreateStreamReq(void *buf, int32_t bufLen, const SCMCreateS
     SFieldWithOptions *pField = taosArrayGet(pReq->pCols, i);
     TAOS_CHECK_EXIT(tEncodeI8(&encoder, pField->type));
     TAOS_CHECK_EXIT(tEncodeI8(&encoder, pField->flags));
-    TAOS_CHECK_EXIT(tEncodeI32(&encoder, pField->bytes));
+    int32_t bytes = pField->bytes;
+    if (IS_DECIMAL_TYPE(pField->type)) {
+      uint8_t prec = 0, scale = 0;
+      extractTypeFromTypeMod(pField->type, pField->typeMod, &prec, &scale, NULL);
+      fillBytesForDecimalType(&bytes, pField->type, prec, scale);
+    }
+    TAOS_CHECK_EXIT(tEncodeI32(&encoder, bytes));
     TAOS_CHECK_EXIT(tEncodeCStr(&encoder, pField->name));
   }
 
@@ -10816,7 +10851,6 @@ int32_t tEncodeSVAlterTbReq(SEncoder *pEncoder, const SVAlterTbReq *pReq) {
       TAOS_CHECK_EXIT(tEncodeI8(pEncoder, pReq->type));
       TAOS_CHECK_EXIT(tEncodeI8(pEncoder, pReq->flags));
       TAOS_CHECK_EXIT(tEncodeI32v(pEncoder, pReq->bytes));
-      TAOS_CHECK_EXIT(tEncodeI32(pEncoder, pReq->typeMod));
       break;
     case TSDB_ALTER_TABLE_DROP_COLUMN:
       TAOS_CHECK_EXIT(tEncodeCStr(pEncoder, pReq->colName));
@@ -10873,13 +10907,15 @@ int32_t tEncodeSVAlterTbReq(SEncoder *pEncoder, const SVAlterTbReq *pReq) {
       TAOS_CHECK_EXIT(tEncodeI8(pEncoder, pReq->flags));
       TAOS_CHECK_EXIT(tEncodeI32v(pEncoder, pReq->bytes));
       TAOS_CHECK_EXIT(tEncodeU32(pEncoder, pReq->compress));
-      TAOS_CHECK_EXIT(tEncodeI32(pEncoder, pReq->typeMod));
       break;
     default:
       break;
   }
   TAOS_CHECK_EXIT(tEncodeI64(pEncoder, pReq->ctimeMs));
   TAOS_CHECK_EXIT(tEncodeI8(pEncoder, pReq->source));
+  if (pReq->action == TSDB_ALTER_TABLE_ADD_COLUMN_WITH_COMPRESS_OPTION || pReq->action == TSDB_ALTER_TABLE_ADD_COLUMN) {
+    TAOS_CHECK_EXIT(tEncodeI32(pEncoder, pReq->typeMod));
+  }
 
   tEndEncode(pEncoder);
 _exit:
@@ -10899,9 +10935,6 @@ static int32_t tDecodeSVAlterTbReqCommon(SDecoder *pDecoder, SVAlterTbReq *pReq)
       TAOS_CHECK_EXIT(tDecodeI8(pDecoder, &pReq->type));
       TAOS_CHECK_EXIT(tDecodeI8(pDecoder, &pReq->flags));
       TAOS_CHECK_EXIT(tDecodeI32v(pDecoder, &pReq->bytes));
-      if (!tDecodeIsEnd(pDecoder)) {
-        TAOS_CHECK_EXIT(tDecodeI32(pDecoder, &pReq->typeMod));
-      }
       break;
     case TSDB_ALTER_TABLE_DROP_COLUMN:
       TAOS_CHECK_EXIT(tDecodeCStr(pDecoder, &pReq->colName));
@@ -10965,9 +10998,6 @@ static int32_t tDecodeSVAlterTbReqCommon(SDecoder *pDecoder, SVAlterTbReq *pReq)
       TAOS_CHECK_EXIT(tDecodeI8(pDecoder, &pReq->flags));
       TAOS_CHECK_EXIT(tDecodeI32v(pDecoder, &pReq->bytes));
       TAOS_CHECK_EXIT(tDecodeU32(pDecoder, &pReq->compress));
-      if (!tDecodeIsEnd(pDecoder)) {
-        TAOS_CHECK_EXIT(tDecodeI32(pDecoder, &pReq->typeMod));
-      }
     default:
       break;
   }
@@ -10988,6 +11018,11 @@ int32_t tDecodeSVAlterTbReq(SDecoder *pDecoder, SVAlterTbReq *pReq) {
   }
   if (!tDecodeIsEnd(pDecoder)) {
     TAOS_CHECK_EXIT(tDecodeI8(pDecoder, &pReq->source));
+  }
+  if (pReq->action == TSDB_ALTER_TABLE_ADD_COLUMN || pReq->action == TSDB_ALTER_TABLE_ADD_COLUMN_WITH_COMPRESS_OPTION) {
+    if (!tDecodeIsEnd(pDecoder)) {
+      TAOS_CHECK_EXIT(tDecodeI32(pDecoder, &pReq->typeMod));
+    }
   }
 
   tEndDecode(pDecoder);
@@ -13243,4 +13278,8 @@ void tDeleteMqBatchMetaRsp(SMqBatchMetaRsp *pRsp) {
   taosArrayDestroy(pRsp->batchMetaLen);
   pRsp->batchMetaReq = NULL;
   pRsp->batchMetaLen = NULL;
+}
+
+bool hasExtSchema(const SExtSchema *pExtSchema) {
+  return pExtSchema->typeMod != 0;
 }
