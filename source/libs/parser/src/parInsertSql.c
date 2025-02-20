@@ -1796,7 +1796,7 @@ static void clearColValArray(SArray* pCols) {
   int32_t num = taosArrayGetSize(pCols);
   for (int32_t i = 0; i < num; ++i) {
     SColVal* pCol = taosArrayGet(pCols, i);
-    if (IS_VAR_DATA_TYPE(pCol->value.type)) {
+    if (IS_VAR_DATA_TYPE(pCol->value.type) || pCol->value.type == TSDB_DATA_TYPE_DECIMAL) {
       taosMemoryFreeClear(pCol->value.pData);
     }
   }
