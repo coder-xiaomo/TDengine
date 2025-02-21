@@ -235,6 +235,7 @@ int32_t updateEventWindowInfo(SStreamAggSupporter* pAggSup, SEventWindowInfo* pW
       pWinInfo->pWinFlag->endFlag = ends[i];
     } else if (pWin->ekey == pTsData[i]) {
       if (pWinInfo->pWinFlag->endFlag == true && ends[i] == false) {
+        (*pWinRow) = i + 1 - start;
         *pRebuild = true;
         goto _end;
       }
