@@ -3879,7 +3879,7 @@ FETCH_NEXT_BLOCK:
           (*ppRes) = pInfo->pUpdateRes;
           return code;
         }
-        qInfo("===stream===%s pInfo->pUpdateRes is empty, fetch next block", GET_TASKID(pTaskInfo), __LINE__);
+        qInfo("===stream===%s pInfo->pUpdateRes is empty, fetch next block. line %d", GET_TASKID(pTaskInfo), __LINE__);
         blockDataCleanup(pInfo->pUpdateDataRes);
         pInfo->scanMode = STREAM_SCAN_FROM_READERHANDLE;
       } break;
