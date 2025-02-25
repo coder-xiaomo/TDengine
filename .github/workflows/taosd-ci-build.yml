@@ -21,7 +21,7 @@ jobs:
   build:
     name: Build and test on ubuntu
     runs-on: ubuntu-latest
-    container: ghcr.io/taosdata/tdengine-build:u2004
+    container: ghcr.io/taosdata/tdengine-build:u2004-2
 
     steps:
       - name: Checkout the repository
