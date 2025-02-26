@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TDINTERNAL_TRIGGER: ${{ github.event.client_payload.tdinternal_source_branch != null }}
+  TDINTERNAL_TRIGGER: 'false'
   TDENGINE_SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
   TDENGINE_TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
   TDENGINE_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -30,9 +30,21 @@ env:
   WIN_SYSTEM_TEST_ROOT: 'C:\\workspace\\${{ github.event.pull_request.number }}\\TDinternal\\community\\tests\\system-test'
 
 jobs:
+  check-trigger-from:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the trigger from
+        id: check_trigger_from
+        run: |
+          TDINTERNAL_TRIGGER='false'
+          if [ -n "${{ github.event.client_payload.tdinternal_source_branch }}" ]; then
+            TDINTERNAL_TRIGGER='true'
+          fi
+          echo "TDINTERNAL_TRIGGER=$TDINTERNAL_TRIGGER" >> $GITHUB_ENV
+
   build-doc:
     uses: ./.github/workflows/taosd-doc-build.yml
-    if: ${{ !github.env.TDINTERNAL_TRIGGER }}
+    if: ${{ github.env.TDINTERNAL_TRIGGER == false }}
     with:
       target_branch: ${{ github.event.pull_request.base.ref }}
       target_pr_number: ${{ github.event.pull_request.number }}
@@ -41,14 +53,14 @@ jobs:
     needs: build-doc
     runs-on: 
       group: CI
-      labels: [self-hosted, Linux, X64]
+      labels: [self-hosted, Linux, X64, testing]
     timeout-minutes: 200
     steps:
       - name: Output the testing information
         run: |
           echo "runner name: ${{ runner.name }}"
           echo "Whether is triggered by TDinternal: ${{ github.env.TDINTERNAL_TRIGGER }}"
-          if ${{ github.env.TDINTERNAL_TRIGGER }} == false; then
+          if [ "${{ env.TDINTERNAL_TRIGGER }}" == "false" ]; then
             echo "${{ env.WKDIR }}/restore.sh -p ${{ github.env.TDENGINE_PR_NUMBER }} -n ${{ github.run_number }} -c ${{ env.CONTAINER_NAME }}"
           else
             echo "${{ env.WKDIR }}/restore.sh -p ${{ github.event.client_payload.tdinternal_pr_number }} -n ${{ github.run_number }} -c ${{ env.CONTAINER_NAME }}"
@@ -59,23 +71,19 @@ jobs:
       - name: Prepare the testing environment
         run: |
           cd ${{ env.WK }}
-          git reset --hard
-          git remote prune origin
-          git fetch
+          git config --list
+          prepare_environment() {
+            cd "$1"
+            git reset --hard
+            git remote prune origin
+            git fetch
+            git checkout "$2"
+          }
+          prepare_environment "${{ env.WK }}" "${{ github.event.pull_request.base.ref}}"
+          prepare_environment "${{ env.WKC }}" "${{ github.event.pull_request.base.ref  }}"
 
-          cd ${{ env.WKC }}
-          git reset --hard
-          git clean -f
-          rm -rf examples/rust/
-          git remote prune origin
-          git fetch
-
-          cd ${{ env.WK }}
-          git checkout ${{ github.event.pull_request.base.ref }}
-          cd ${{ env.WKC }}
-          git checkout ${{ github.event.pull_request.base.ref }}
       - name: Get latest codes and logs for TDinternal PR
-        if: ${{ github.env.TDINTERNAL_TRIGGER }}
+        if: ${{ env.TDINTERNAL_TRIGGER == 'true' }}
         run: |
           cd ${{ env.WK }}
           git pull >/dev/null
@@ -93,7 +101,7 @@ jobs:
           git log -5
           echo "community log: `git log -5`" >>${{ env.WKDIR }}/jenkins.log
       - name: Get latest codes and logs for TDengine PR
-        if: ${{ !github.env.TDINTERNAL_TRIGGER }}
+        if: ${{ env.TDINTERNAL_TRIGGER == 'false' }}
         run: |
           cd ${{ env.WKC }}
           git remote prune origin
@@ -110,13 +118,6 @@ jobs:
           git pull >/dev/null
           git log -5
           echo "TDinternal log: `git log -5`" >>${{ env.WKDIR }}/jenkins.log
-      - name: Remove the old cache of tools and examples
-        run: |
-          cd ${{ env.WKC }}
-          git rm --cached tools/taos-tools 2>/dev/null || :
-          git rm --cached tools/taosadapter 2>/dev/null || :
-          git rm --cached tools/taosws-rs 2>/dev/null || :
-          git rm --cached examples/rust 2>/dev/null || :
       - name: Update submodule
         run: |
           cd ${{ env.WKC }}
